@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Диагностика — Art, Coffee &amp; Motivation</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:14px;background:#fff;color:#111;
+  font:15px/1.5 ui-monospace,Menlo,Consolas,monospace;word-break:break-word}
+h1{font-size:19px;margin:0 0 4px}
+p.sub{margin:0 0 12px;color:#666;font-size:13px}
+fieldset{border:1px solid #bbb;margin:0 0 10px;padding:8px 10px}
+legend{font-weight:700;font-size:13px;background:#eee;padding:0 5px}
+table{border-collapse:collapse;width:100%}
+td{padding:2px 4px 2px 0;vertical-align:top;font-size:13px}
+td.k{width:44%;color:#555}
+.ok{color:#0a7d28;font-weight:700}
+.bad{color:#c00;font-weight:700}
+.warn{color:#a60;font-weight:700}
+#go{margin:0 0 12px;padding:14px 18px;font-size:17px;font-weight:700;
+  background:#111;color:#fff;border:0;border-radius:8px;width:100%}
+.note{font-size:12px;color:#666;margin:8px 0 0}
+</style>
+</head>
+<body>
+
+<h1>Диагностика загрузки сайта</h1>
+<p class="sub">Страница полностью автономна: ни одного внешнего файла. Нажми кнопку — покажет, что и за сколько скачалось с настоящего сайта.</p>
+<button id="go">Проверить сайт</button>
+
+<fieldset><legend>Это устройство</legend><table id="dev"></table></fieldset>
+<fieldset><legend>Файлы сайта (проверка загрузки)</legend><table id="files"></table></fieldset>
+<fieldset><legend>Состояние главной страницы</legend><table id="page"></table></fieldset>
+
+<p class="note">Если строки зелёные — сайт отдаёт всё быстро, и проблема в браузере. Если красные — будет видно, какой именно файл зависает. Скриншот этого экрана и есть ответ.</p>
+
+<script>
+(function () {
+  "use strict";
+  var d = document, out = {};
+  function row(table, k, v, cls) {
+    var tr = d.createElement("tr");
+    var a = d.createElement("td"); a.className = "k"; a.textContent = k;
+    var b = d.createElement("td"); b.textContent = v;
+    if (cls) { var s = d.createElement("span"); s.className = cls; s.textContent = v; b.textContent = ""; b.appendChild(s); }
+    tr.appendChild(a); tr.appendChild(b); out[table].appendChild(tr);
+  }
+  out.dev = d.getElementById("dev");
+  out.files = d.getElementById("files");
+  out.page = d.getElementById("page");
+
+  var nav = navigator, cx = nav.connection || nav.mozConnection || nav.webkitConnection || {};
+  row("dev", "Браузер", nav.userAgent || "?");
+  row("dev", "Экран", (screen ? screen.width + "×" + screen.height : "?") + "px, dpr=" + (window.devicePixelRatio || 1));
+  row("dev", "Окно", (window.innerWidth || 0) + "×" + (window.innerHeight || 0) + "px");
+  row("dev", "Сеть", [cx.effectiveType || "?", cx.type || "?", nav.connection ? "saveData=" + !!cx.saveData : "?"].join(", "));
+  row("dev", "Онлайн", String(nav.onLine));
+  row("dev", "Память/ядра", (nav.deviceMemory || "?") + " МБ / " + (nav.hardwareConcurrency || "?"));
+  row("dev", "Время входа", new Date().toTimeString());
+  row("dev", "JS работает", "да (эта страница загрузилась)", "ok");
+
+  if ("serviceWorker" in nav) {
+    row("dev", "Service Worker", "есть в браузере" + (nav.serviceWorker.controller ? ", активен (возможен старый кэш!)" : ", не активен"));
+  }
+  try { localStorage.setItem("_t", "1"); localStorage.removeItem("_t"); row("dev", "localStorage", "доступен", "ok"); }
+  catch (e) { row("dev", "localStorage", "ЗАБЛОКИРОВАН — " + e.name, "bad"); }
+
+  var FILES = [
+    ["Главная страница", "/index.html"],
+    ["Стили", "/assets/site.css"],
+    ["Скрипт", "/assets/site.js"],
+    ["Шрифты (описание)", "/assets/fonts.css"],
+    ["Шрифт Manrope", "/assets/fonts/manrope-normal-400-cyrillic.woff2"],
+    ["Шрифт Cormorant", "/assets/fonts/cormorant-garamond-normal-600-cyrillic.woff2"],
+    ["Фото героя", "/assets/img/art-02.jpg"],
+    ["Фото из ленты", "/assets/img/art-04.jpg"],
+    ["Постер видео", "/assets/poster/video-01.jpg"],
+    ["Видео (1-й кусок)", "/assets/video/video-01.mp4"]
+  ];
+
+  function timedFetch(url) {
+    var t0 = performance.now();
+    var ctl = ("AbortController" in window) ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 12000);
+    var opts = ctl ? { signal: ctl.signal, cache: "no-store" } : { cache: "no-store" };
+    return fetch(url, opts).then(function (r) {
+      var ct = r.headers.get("content-type") || "?";
+      /* читаем кусок, чтобы проверить, что поток идёт */
+      return r.body ? r.body.getReader().read() : r.arrayBuffer();
+    }).then(function (chunk) {
+      clearTimeout(timer);
+      var ms = Math.round(performance.now() - t0);
+      var got = chunk && chunk.value ? chunk.value.byteLength : 0;
+      return { ok: true, ms: ms, got: got, ct: ct };
+    }).catch(function (e) {
+      clearTimeout(timer);
+      return { ok: false, ms: Math.round(performance.now() - t0), err: (e && e.name) || "ошибка" };
+    });
+  }
+
+  var PROBES = FILES.map(function (f) {
+    row("files", f[0], "жду…");
+    var tr = out.files.lastChild.lastChild;
+    timedFetch(f[1] + "?diag=" + Date.now()).then(function (res) {
+      tr.textContent = "";
+      var s = d.createElement("span");
+      if (!res.ok) { s.className = "bad"; s.textContent = "НЕ ЗАГРУЗИЛСЯ (" + res.err + "), " + res.ms + " мс"; }
+      else if (res.ms > 6000) { s.className = "warn"; s.textContent = "очень медленно: " + res.ms + " мс, " + res.got + " Б"; }
+      else { s.className = "ok"; s.textContent = "ок, " + res.ms + " мс, " + res.got + " Б (" + res.ct + ")"; }
+      tr.appendChild(s);
+    });
+  });
+
+  /* что грузится на главной странице (если она уже открыта в соседней вкладке — покажет и это) */
+  function probePage() {
+    row("page", "Адрес", location.href);
+    row("page", "Загружено стилей", String(d.styleSheets.length));
+    row("page", "Правил в site.css", (function () {
+      try { return String(d.styleSheets[0] ? d.styleSheets[0].cssRules.length : "нет доступа"); }
+      catch (e) { return "не прочитать: " + e.name; }
+    })());
+    row("page", "Шрифты", d.fonts ? (d.fonts.status + ", загружено " + d.fonts.size) : "FontFaceSet нет");
+    var nav2 = performance.getEntriesByType("navigation")[0];
+    if (nav2) {
+      row("page", "Загрузка этой стр.", Math.round(nav2.duration) + " мс, ответ " + nav2.responseStatus);
+    }
+    var slow = performance.getEntriesByType("resource").filter(function (e) { return e.duration > 1500; });
+    row("page", "Медленных запросов", slow.length ? slow.length + " (дольше 1.5 с)" : "нет");
+  }
+  probePage();
+  setTimeout(function () {
+    row("page", "Шрифты через 3 с", d.fonts ? (d.fonts.status + ", загружено " + d.fonts.size) : "?");
+    row("page", "Время на телефоне", new Date().toTimeString());
+  }, 3000);
+
+  d.getElementById("go").addEventListener("click", function () { location.reload(); });
+  setTimeout(function () {
+    var left = PROBES.filter(function () { return true; }).length;
+    if (left) row("files", "итог", "проверка идёт, подожди пару секунд");
+  }, 13000);
+})();
+</script>
+</body>
+</html>
